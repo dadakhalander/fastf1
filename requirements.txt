@@ -26,6 +26,7 @@ requests-cache==0.9.5
 scipy==1.8.1
 signalr-client-aio==0.0.1.6.2
 six==1.16.0
+streamlit==x.x.x
 thefuzz==0.19.0
 timple==0.1.5
 url-normalize==1.4.3
