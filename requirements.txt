@@ -4,3 +4,4 @@ numpy
 requests
 matplotlib
 fastf1
+PyQt5
