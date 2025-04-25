@@ -5,6 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import fastf1
+import module.fastf1 as f1
+
 import sys
 from pathlib import Path
 import os
