@@ -5,3 +5,4 @@ requests
 matplotlib
 fastf1
 PyQt5
+dash
