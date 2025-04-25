@@ -2,23 +2,30 @@ import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
-import pandas as pd
-import fastf1 as f1
-import fastf1.plotting
+import fastf1
+import os
+import sys
+from pathlib import Path
+
+# Ensure module path is correct
+base_dir = os.path.dirname(Path(__file__).resolve())
+if base_dir not in sys.path:
+    sys.path.append(base_dir)
 
 # Enable FastF1 plotting
-f1.plotting.setup_mpl(misc_mpl_mods=False)
+fastf1.plotting.setup_mpl(misc_mpl_mods=False)
 
 # Initialize the Dash app
 app = dash.Dash(__name__)
+server = app.server  # for deployment
 
-# Load available years and initial data
-available_years = f1.get_event_schedule(2023)['EventDate'].dt.year.unique()[::-1]
-initial_year = available_years[0]
-races = f1.get_event_schedule(initial_year)
-drivers = f1.get_driver_schedule(initial_year)
+# Load available years
+available_years = list(range(2018, 2024))  # Or hardcoded if needed
+initial_year = available_years[-1]
+initial_races_df = fastf1.get_event_schedule(initial_year)
+initial_race_name = initial_races_df['EventName'].iloc[0]
 
-# Create the layout
+# Layout
 app.layout = html.Div([
     html.H1("Formula 1 Race Analysis Dashboard", style={'textAlign': 'center'}),
 
@@ -63,27 +70,38 @@ app.layout = html.Div([
     ])
 ])
 
-# Update race dropdown when year changes
+# Callback: Race Dropdown Options
 @app.callback(
     Output('race-dropdown', 'options'),
     Input('year-dropdown', 'value')
 )
 def update_race_options(year):
-    schedule = f1.get_event_schedule(year)
-    return [{'label': row['EventName'], 'value': row['EventName']} for _, row in schedule.iterrows()]
+    try:
+        races_df = fastf1.get_event_schedule(year)
+        return [{'label': row['EventName'], 'value': row['EventName']} for _, row in races_df.iterrows()]
+    except Exception as e:
+        print(f"Race dropdown error: {e}")
+        return []
 
-# Update driver dropdown when year changes
+# Callback: Driver Dropdown Options
 @app.callback(
     Output('driver-dropdown', 'options'),
-    Input('year-dropdown', 'value')
+    [Input('year-dropdown', 'value'),
+     Input('race-dropdown', 'value')]
 )
-def update_driver_options(year):
-    session = f1.get_session(year, 1, 'R')
-    session.load()
-    drivers = session.laps['Driver'].unique()
-    return [{'label': d, 'value': d} for d in drivers]
+def update_driver_options(year, race):
+    try:
+        races_df = fastf1.get_event_schedule(year)
+        race_row = races_df[races_df['EventName'] == race].iloc[0]
+        session = fastf1.get_session(year, race_row['RoundNumber'], 'R')
+        session.load()
+        drivers = session.laps['Driver'].unique()
+        return [{'label': d, 'value': d} for d in drivers]
+    except Exception as e:
+        print(f"Driver dropdown error: {e}")
+        return []
 
-# Lap Times Graph
+# Callback: Lap Times Graph
 @app.callback(
     Output('lap-times-graph', 'figure'),
     [Input('year-dropdown', 'value'),
@@ -93,29 +111,33 @@ def update_driver_options(year):
 def update_lap_times(year, race, driver):
     if not all([year, race, driver]):
         return go.Figure()
-
     try:
-        session = f1.get_session(year, race, 'R')
+        races_df = fastf1.get_event_schedule(year)
+        race_row = races_df[races_df['EventName'] == race].iloc[0]
+        session = fastf1.get_session(year, race_row['RoundNumber'], 'R')
         session.load()
-        laps = session.laps.pick_driver(driver).reset_index()
-        laps['LapTime(s)'] = laps['LapTime'].dt.total_seconds()
+
+        driver_laps = session.laps.pick_driver(driver).reset_index()
+        driver_laps['LapTime(s)'] = driver_laps['LapTime'].dt.total_seconds()
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=laps['LapNumber'],
-            y=laps['LapTime(s)'],
+            x=driver_laps['LapNumber'],
+            y=driver_laps['LapTime(s)'],
             mode='lines+markers',
-            name='Lap Time'
+            name='Lap Times'
         ))
-        fig.update_layout(title=f'Lap Times for {driver} in {race} {year}',
-                          xaxis_title='Lap Number',
-                          yaxis_title='Lap Time (s)')
+        fig.update_layout(
+            title=f'Lap Times for {driver} - {race} {year}',
+            xaxis_title='Lap Number',
+            yaxis_title='Lap Time (seconds)'
+        )
         return fig
     except Exception as e:
         print(f"Lap time error: {e}")
         return go.Figure()
 
-# Speed Graph
+# Callback: Speed Analysis Graph
 @app.callback(
     Output('speed-analysis-graph', 'figure'),
     [Input('year-dropdown', 'value'),
@@ -125,12 +147,14 @@ def update_lap_times(year, race, driver):
 def update_speed_analysis(year, race, driver):
     if not all([year, race, driver]):
         return go.Figure()
-
     try:
-        session = f1.get_session(year, race, 'R')
+        races_df = fastf1.get_event_schedule(year)
+        race_row = races_df[races_df['EventName'] == race].iloc[0]
+        session = fastf1.get_session(year, race_row['RoundNumber'], 'R')
         session.load()
-        lap = session.laps.pick_driver(driver).pick_fastest()
-        tel = lap.get_telemetry()
+
+        fastest_lap = session.laps.pick_driver(driver).pick_fastest()
+        tel = fastest_lap.get_telemetry()
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -139,15 +163,17 @@ def update_speed_analysis(year, race, driver):
             mode='lines',
             name='Speed'
         ))
-        fig.update_layout(title=f'Speed Analysis - Fastest Lap for {driver}',
-                          xaxis_title='Distance (m)',
-                          yaxis_title='Speed (km/h)')
+        fig.update_layout(
+            title=f'Speed Analysis - Fastest Lap for {driver}',
+            xaxis_title='Distance (m)',
+            yaxis_title='Speed (km/h)'
+        )
         return fig
     except Exception as e:
         print(f"Speed analysis error: {e}")
         return go.Figure()
 
-# Position Graph
+# Callback: Position Changes
 @app.callback(
     Output('position-changes-graph', 'figure'),
     [Input('year-dropdown', 'value'),
@@ -157,10 +183,12 @@ def update_speed_analysis(year, race, driver):
 def update_position_changes(year, race, driver):
     if not all([year, race, driver]):
         return go.Figure()
-
     try:
-        session = f1.get_session(year, race, 'R')
+        races_df = fastf1.get_event_schedule(year)
+        race_row = races_df[races_df['EventName'] == race].iloc[0]
+        session = fastf1.get_session(year, race_row['RoundNumber'], 'R')
         session.load()
+
         laps = session.laps.pick_driver(driver)
 
         fig = go.Figure()
@@ -170,16 +198,18 @@ def update_position_changes(year, race, driver):
             mode='lines+markers',
             name='Position'
         ))
-        fig.update_layout(title=f'Position Changes - {driver}',
-                          xaxis_title='Lap Number',
-                          yaxis_title='Position',
-                          yaxis_autorange='reversed')
+        fig.update_layout(
+            title=f'Position Changes for {driver} - {race} {year}',
+            xaxis_title='Lap Number',
+            yaxis_title='Position',
+            yaxis_autorange='reversed'
+        )
         return fig
     except Exception as e:
         print(f"Position change error: {e}")
         return go.Figure()
 
-# Tire Strategy Graph
+# Callback: Tire Strategy
 @app.callback(
     Output('tire-strategy-graph', 'figure'),
     [Input('year-dropdown', 'value'),
@@ -189,32 +219,40 @@ def update_position_changes(year, race, driver):
 def update_tire_strategy(year, race, driver):
     if not all([year, race, driver]):
         return go.Figure()
-
     try:
-        session = f1.get_session(year, race, 'R')
+        races_df = fastf1.get_event_schedule(year)
+        race_row = races_df[races_df['EventName'] == race].iloc[0]
+        session = fastf1.get_session(year, race_row['RoundNumber'], 'R')
         session.load()
-        stints = session.laps.pick_driver(driver).reset_index()
-        colors = {
-            'SOFT': 'red', 'MEDIUM': 'yellow', 'HARD': 'white',
-            'INTERMEDIATE': 'green', 'WET': 'blue'
+
+        laps = session.laps.pick_driver(driver).reset_index()
+        fig = go.Figure()
+
+        compound_colors = {
+            'SOFT': 'red',
+            'MEDIUM': 'yellow',
+            'HARD': 'white',
+            'INTERMEDIATE': 'green',
+            'WET': 'blue'
         }
 
-        fig = go.Figure()
-        for compound in stints['Compound'].unique():
-            stint_data = stints[stints['Compound'] == compound]
+        for compound in laps['Compound'].dropna().unique():
+            stint = laps[laps['Compound'] == compound]
             fig.add_trace(go.Bar(
-                x=[stint_data['LapNumber'].min()],
+                x=[stint['LapNumber'].min()],
+                width=[stint['LapNumber'].max() - stint['LapNumber'].min() + 1],
                 y=[compound],
-                width=[stint_data['LapNumber'].max() - stint_data['LapNumber'].min() + 1],
                 orientation='h',
                 name=compound,
-                marker_color=colors.get(compound, 'gray')
+                marker_color=compound_colors.get(compound, 'gray')
             ))
 
-        fig.update_layout(title=f'Tire Strategy - {driver}',
-                          xaxis_title='Lap Number',
-                          yaxis_title='Compound',
-                          barmode='stack')
+        fig.update_layout(
+            title=f'Tire Strategy for {driver} - {race} {year}',
+            xaxis_title='Lap Number',
+            yaxis_title='Compound',
+            barmode='stack'
+        )
         return fig
     except Exception as e:
         print(f"Tire strategy error: {e}")
@@ -222,4 +260,3 @@ def update_tire_strategy(year, race, driver):
 
 if __name__ == '__main__':
     app.run_server(debug=True)
-
